@@ -1,0 +1,174 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: users
+    // Document ID: {userId}
+    // Fields:
+    //   - uid: string (required, immutable)
+    //   - email: string (required, immutable)
+    //   - minecraftUsername: string (required, max 16 chars)
+    //   - role: string (required, enum: ['admin', 'user'])
+    //   - createdAt: timestamp (required, immutable)
+    //
+    // Collection: tickets
+    // Document ID: {ticketId}
+    // Fields:
+    //   - id: string (required, immutable)
+    //   - uid: string (required, immutable)
+    //   - category: string (required, max 50 chars)
+    //   - subject: string (required, max 100 chars)
+    //   - message: string (required, max 2000 chars)
+    //   - status: string (required, enum: ['open', 'pending', 'closed'])
+    //   - createdAt: timestamp (required, immutable)
+    //   - updatedAt: timestamp (required)
+    //
+    // Collection: suggestions
+    // Document ID: {suggestionId}
+    // Fields:
+    //   - id: string (required, immutable)
+    //   - uid: string (required, immutable)
+    //   - title: string (required, max 100 chars)
+    //   - description: string (required, max 1000 chars)
+    //   - votes: int (required)
+    //   - status: string (required, enum: ['under-review', 'planned', 'implemented'])
+    //   - createdAt: timestamp (required, immutable)
+    //
+    // Collection: products
+    // Document ID: {productId}
+    // Fields:
+    //   - id: string (required, immutable)
+    //   - name: string (required, max 50 chars)
+    //   - price: number (required, positive)
+    //   - description: string (required, max 500 chars)
+    //   - category: string (required, enum: ['rank', 'item', 'perk'])
+    //   - image: string (required, valid URL)
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+          (request.auth.token.email == "kishorchoudhary395395@gmail.com" && request.auth.token.email_verified == true));
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+
+    function isValidEmail(email) {
+      return email is string && email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    function isValidUrl(url) {
+      return url is string && (url.matches("^https://.*") || url.matches("^http://.*"));
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+
+    function isValidUser(data) {
+      return hasRequiredFields(['uid', 'email', 'minecraftUsername', 'role', 'createdAt']) &&
+             hasOnlyAllowedFields(['uid', 'email', 'minecraftUsername', 'role', 'createdAt']) &&
+             data.uid == request.auth.uid &&
+             data.email == request.auth.token.email &&
+             data.minecraftUsername is string && data.minecraftUsername.size() > 0 && data.minecraftUsername.size() <= 16 &&
+             data.role in ['admin', 'user'] &&
+             data.createdAt is timestamp;
+    }
+
+    function isValidTicket(data) {
+      return hasRequiredFields(['id', 'uid', 'category', 'subject', 'message', 'status', 'createdAt', 'updatedAt']) &&
+             hasOnlyAllowedFields(['id', 'uid', 'category', 'subject', 'message', 'status', 'createdAt', 'updatedAt']) &&
+             data.id is string &&
+             data.uid == request.auth.uid &&
+             data.category is string && data.category.size() <= 50 &&
+             data.subject is string && data.subject.size() <= 100 &&
+             data.message is string && data.message.size() <= 2000 &&
+             data.status in ['open', 'pending', 'closed'] &&
+             data.createdAt is timestamp &&
+             data.updatedAt is timestamp;
+    }
+
+    function isValidSuggestion(data) {
+      return hasRequiredFields(['id', 'uid', 'title', 'description', 'votes', 'status', 'createdAt']) &&
+             hasOnlyAllowedFields(['id', 'uid', 'title', 'description', 'votes', 'status', 'createdAt']) &&
+             data.id is string &&
+             data.uid == request.auth.uid &&
+             data.title is string && data.title.size() <= 100 &&
+             data.description is string && data.description.size() <= 1000 &&
+             data.votes is int &&
+             data.status in ['under-review', 'planned', 'implemented'] &&
+             data.createdAt is timestamp;
+    }
+
+    function isValidProduct(data) {
+      return hasRequiredFields(['id', 'name', 'price', 'description', 'category', 'image']) &&
+             hasOnlyAllowedFields(['id', 'name', 'price', 'description', 'category', 'image']) &&
+             data.id is string &&
+             data.name is string && data.name.size() <= 50 &&
+             data.price is number && data.price >= 0 &&
+             data.description is string && data.description.size() <= 500 &&
+             data.category in ['rank', 'item', 'perk'] &&
+             isValidUrl(data.image);
+    }
+
+    // ===============================================================
+    // Collection Rules
+    // ===============================================================
+
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      allow create: if isOwner(userId) && isValidUser(request.resource.data) && (request.resource.data.role == 'user' || isAdmin());
+      allow update: if isOwner(userId) && isValidUser(request.resource.data) && (request.resource.data.role == resource.data.role || isAdmin());
+    }
+
+    match /tickets/{ticketId} {
+      allow read: if isOwner(resource.data.uid) || isAdmin();
+      allow create: if isAuthenticated() && isValidTicket(request.resource.data);
+      allow update: if (isOwner(resource.data.uid) && isValidTicket(request.resource.data) && request.resource.data.status == resource.data.status) || isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    match /suggestions/{suggestionId} {
+      allow read: if true;
+      allow create: if isAuthenticated() && isValidSuggestion(request.resource.data) && request.resource.data.votes == 0 && request.resource.data.status == 'under-review';
+      allow update: if (isAuthenticated() && 
+                        hasOnlyAllowedFields(['id', 'uid', 'title', 'description', 'votes', 'status', 'createdAt']) &&
+                        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['votes']) &&
+                        math.abs(request.resource.data.votes - resource.data.votes) == 1) || isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    match /products/{productId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Default deny
+    match /{path=**} {
+      allow read, write: if false;
+    }
+  }
+}
